@@ -1,0 +1,473 @@
+hardhat fundMe process:
+
+1. create folder in vs code
+2. run "npm init" to add package.json to project
+3. remove "main: index.js" line from package.json
+4. run "npm install --dev hardhat" to install hardhat
+5. run"npx hardhat" to start creating a hardhat project
+6. choose javascript project, and add .gitignore
+7. hardhat displays a set of dependencies that need to also be installed. Copy the command and run it. Check package.json to make sure they are installed.
+8. rename Lock.sol with fund me contract and copy paste the Fund.sol contract.
+9. Add the PriceConverter.sol contract to the contracts folder form remix.
+10. install @chainlink/contracts with "npm install @chainlink/contracts --save"
+11. In PriceConverter.sol, change the directory of the import to where the node module is.
+12. run "npx hardhat compile" to compile the 2 contracts.
+#note: if you use npm package manager from the beginning, don't use yarn later, since it may create complications
+13. install the hardhat-deploy node module by running "npm install -D hardhat-deploy" for simpler deployment of contracts.
+14. import hardhat-deploy by adding "require("hardhat-deploy");" to hardhat.config.json
+15. delete the deploy.js file from scripts
+16. create a new folder called "deploy" in root dir.
+#note: you can create folders by running "mkdir folder_name"
+17. install hardhat-deploy-ethers by running "npm install --save-dev  @nomiclabs/hardhat-ethers@npm:hardhat-deploy-ethers ethers"
+18. Create a deploy file called "01-fundme-deploy.js" in the deploy folder in
+19. add the following line to the file:
+
+module.exports = async ({ getNamedAccounts, deployments }) => {};
+
+#note:  getNamedAccounts and deployments come from hre which is hardhat runtime environment.
+#note: instead of an arrow function a normal function with name can be used:
+
+async function deployFunc(hre){
+   const {getNamedAccounts, deployments} = hre;
+}
+
+module.exports.default = deployFunc;
+
+20. Inside the anonymous async function the following functions need to be extracted from deployments and getNamedAccounts:
+
+module.exports = async ({ getNamedAccounts, deployments }) => {
+  const { deploy, log } = deployments;
+  const { deployer } = await getNamedAccounts();
+};
+
+21. Import the following requirements to the hardhat.config.josn:
+
+require("dotenv").config();
+require("hardhat-gas-reporter");
+require("solidity-coverage");
+
+22. Add the following properties below the solidity version property in module.exports:
+
+defaultNetwork: "hardhat",
+  networks: {
+    goerli: {
+      url: process.env.GOERLI_RPC_URL,
+      accounts: [process.env.PRIVATE_KEY],
+      chainId: 5,
+    },
+  },
+  gasReporter: {
+    enabled: true,
+    currency: "EUR",
+    coinmarketcap: process.env.CMC_API_KEY,
+    token: "ETH",
+  },
+
+23. Install the dotenv package.
+24. Add the .env file with the goerli rpc, cmc key, and private key
+25. Add the following property to module.exports of hardhat.config.json:
+
+namedAccounts: {
+    deployer: {
+      default: 0,
+    },
+  },
+
+26. Add the following line to your deployment script main function and import hardhat while extracting only network:
+
+const {network} = require("hardhat");
+const chainId = network.config.chainId;
+
+27. Since for deployment we don't want to use real test networks at first, because they take too much time, but because we have an external aggregator, and can't simply use localhost or hardhat networks, we need to do something called mocking, in order to do so, we need to do a little bit of refactoring to our fund contract.
+28. Since the constructor function only gets called once when deploying the contract, we could add the price feed address to it as a parameter. This is because, different price feeds on different networks have different addresses(polygon, bnb, goerli, ethereum mainnet):
+
+contract Fund {
+...
+AggregatorV3Interface public priceFeed;
+
+    constructor(address priceFeedAddress) {
+        i_manager = msg.sender;
+        priceFeed = AggregatorV3Interface(priceFeedAddress);
+    }
+...
+
+29. Add pricefeed as an arguement to the getconversionRate in the sendFunds function:
+
+msg.value.getConversionRate(priceFeed) >= MINIMUM_USD,
+
+30. Change the price converter contract to the following:
+
+// SPDX-License-Identifier: MIT
+
+pragma solidity ^0.8.0;
+
+import "../node_modules/@chainlink/contracts/src/v0.8/interfaces/AggregatorV3Interface.sol";
+
+library PriceConverter {
+    function getPriceUsd(
+        AggregatorV3Interface priceFeed
+    ) internal view returns (uint256) {
+        (, int256 price, , , ) = priceFeed.latestRoundData();
+        return uint256(price * 1e10);
+    }
+
+    function getConversionRate(
+        uint256 ethAmount,
+        AggregatorV3Interface priceFeed
+    ) internal view returns (uint256) {
+        uint256 ethPrice = getPriceUsd(priceFeed);
+        uint256 ethAmountInUsd = (ethPrice * ethAmount) / 1e18;
+        return ethAmountInUsd;
+    }
+}
+
+31. compile the contracts again using the hardhat network by running "npx hardhat compile"
+32. After the contracts are compiled again, it is time for deployment, in order to do so, we'll first create js file to add different networks based on their chain Ids, and then use them in the deploy script
+33. Create a js file on root directory called "helper-hardhat-config.js" and add the following code to it:
+
+const networkConfig = {
+  5: {
+    name: "Goerli-Testnet",
+    ethUsdPriceFeed: "0xD4a33860578De61DBAbDc8BFdb98FD742fA7028e",
+  },
+  1: {
+    name: "Ethereum-Mainnet",
+    ethUsdPriceFeed: "0x5f4eC3Df9cbd43714FE2740f5E3616155c5b8419",
+  },
+  137: {
+    name: "Polygon-Mainnet",
+    ethUsdPriceFeed: "0xF9680D99D6C9589e2a93a78A04A279e509205945",
+  },
+  80001: {
+    name: "Mumbai-Testnet",
+    ethUsdPriceFeed: "0x0715A7794a1dc8e42615F059dD6e406A6594651A",
+  },
+};
+
+const developmentChains = ["hardhat", "localhost"];
+
+module.exports = {
+  networkConfig,
+  developmentChains,
+};
+
+#note: by adding module.exports at the end of a js file, you can especify the properties that can then be imported by other js files.
+34. In the deploy script, import the following requirement:
+
+const { networkConfig } = require("../helper-hardhat-config");
+
+35. In the deploy script, add the following code to the main function:
+
+  const ethUsdPriceFeedAddress = networkConfig[chainId]["ethUsdPricefeed"];
+
+  const fund = await deploy("Fund", {
+    from: deployer,
+    args: [], //put price feed address
+    log: true,
+  });
+
+#note in the line "const ethUsdPriceFeedAddress = networkConfig[chainId]["ethUsdPriceFeed"];" networkConfig is the object, networkConfig[chainId] is the property, and ["ethUsdPriceFeed"] is the value
+36. create a new js file in the deploy folder called "00-deploy-mocks.js" and add the following code to it:
+
+const { networkConfig, developmentChains } = require("../helper-hardhat-config");
+const { network } = require("hardhat");
+
+module.exports = async ({ getNamedAccounts, deployments }) => {
+  const { deploy, log } = deployments;
+  const { deployer } = await getNamedAccounts();
+  const chainId = network.config.chainId;
+};
+
+37. create a folder inside the contracts folder called "mocks" and create a file called "MockV3Aggregator.sol" and add the following code to it:
+
+// SPDX-License-Identifier: MIT
+
+pragma solidity 0.8.0;
+
+import "@chainlink/contracts/src/v0.8/tests/MockV3Aggregator.sol";
+
+#note: since the mock aggregator from chainlink is using version 0.8, the solidity version has to also be 0.8.0
+38. Since the version of solidity in hardhat.config.json is 0.8.17 but we want to use 0.8.0 for our mock, we'll need to add that version as well by changing the solidity version to an object:
+
+module.exports = {
+  solidity: {
+    compilers: [
+      { version: "0.8.17" },
+      { version: "0.8.0" },
+    ],
+  },
+
+39. Compile the contracts again using "npx hardhat compile".
+40. Looking at the mock aggregator in chainlink github, we'll notice there are two arguements passed to the constructor function. These 2 arguements have to be passed to the ARGS property in the js deploy mock file. A good practice is to define the 2 arguements as variables in the helper hardhat config file and then import them to the mock deploy file:
+
+const developmentChains = ["hardhat", "localhost"];
+const DECIMAL = 8;
+const INITIAL_ANSWER = 110000000000;
+
+module.exports = {
+  networkConfig,
+  developmentChains,
+  DECIMAL,
+  INITIAL_ANSWER,
+};
+
+41. Import the two variables of decimal and initial answer to the mock deploy file:
+
+const {
+  networkConfig,
+  developmentChains,
+  DECIMAL,
+  INITIAL_ANSWER,
+} = require("../helper-hardhat-config");
+
+42. Add the following if statement to the mock deploy js file:
+
+if (chainId == "31337") {
+    log("local network chosen. Deploying mocks!");
+    await deploy("MockV3Aggregator", {
+      from: deployer,
+      log: true,
+      args: [DECIMAL, INITIAL_ANSWER]
+    });
+    log("mock deployed!")
+  }
+
+#note: in the original chainlink mock file, decimal comes first and then initial answer. It is important to keep this order when passing the arguments to ARGS.
+43. add 2 module.exports.tags of "all" and "mocks" to the deploy mock file so that while deploying the contract you can especify if you want all or only mocks to be deployed:
+
+module.exports.tags = ["all", "mocks"];
+
+44. deploy the contract with only mocks by running "npx hardhat deploy --tags mocks"
+45. Back to the fund deploy script, since it is not completed, change the line "const ethUsdPriceFeedAddress = networkConfig[chainId]["ethUsdPriceFeed"];" to "let ethUsdPriceFeedAddress;"
+46. Add "get" to extracts of deployment:
+
+ const { deploy, log, get } = deployments;
+
+47. Add the following if statement below "let ethUsdPriceFeedAddress;":
+
+if (developmentChains.includes(network.name)) {
+    const ethUsdAggregator = await get("MockV3Aggregator");
+    ethUsdPriceFeedAddress = ethUsdAggregator.address;
+  } else {
+    ethUsdPriceFeedAddress = networkConfig[chainId]["ethUsdPriceFeed"];
+  }
+
+#note: This if statements says, if the network includes names (hardhat, localhost) then run mocks, otherwise deploy using the chosen chain
+#note: This if statement can also be used instead: if (chainId == "31337")
+48. add "ethUsdPriceFeedAddress" variable to the ARGS property:
+
+ args: [ethUsdPriceFeedAddress], //put price feed address
+
+49. Just like in the mock deploy file, add the following to the fund deploy file:
+
+module.exports.tags = ["all", "fund"];
+
+
+
+>> Running tests
+50. Delete the Lock.js from the test folder and
+51. Create two new folders in test folder with names of "staging" and "unit"
+#note: unit and staging are two different types of testing. Unit testing is the usual testing done with chai and mocha and it is run on local test networks. Stating is the last stop of testing and may not always be necessary and will be run on real test nets.
+52. Add a describe function for fund as well as some imports:
+
+const { deployments, ethers, getNamedAccounts } = require("hardhat");
+
+describe("Fund", () => {
+    
+})
+
+53. Add a beforeEach async function to deploy the contract as well as needed variables before that:
+
+describe("Fund", () => {
+  let fund;
+  let mockV3Aggregator;
+  let deployer;
+ beforeEach(async () => {
+    deployer  = (await getNamedAccounts()).deployer;
+    await deployments.fixture(["all"]);
+    fund = await ethers.getContract("Fund", deployer);
+    mockV3Aggregator = await ethers.getContract("MockV3Aggregator", deployer);
+  });
+
+54. Extract and import "assert" from Chai package:
+
+const {assert} = require("chai");
+
+#note: in beforeEach we deploy the Fund contract first before starting to test
+55. Create a nested describe for constructor part of the contract and add the following test to it using an "it" function:
+
+ describe("constructor", async () => {
+    it("sets the aggregator addresses correctly.", async () => {
+      const response = await fund.priceFeed();
+      assert.equal(response, mockV3Aggregator.address);
+    });
+  });
+
+55. run "npx hardhat test" to see if the test passes.
+56. Extract "expect" from chai.
+57. Second test will be for the sendFunds function of the contract. So a describe will be added exclusively for it and an it function to see if the test passes if transaction is failed when not enough eth has been sent:
+
+describe("sendFundsFunction", () => {
+    it("fails if you don't send enough eth", async () => {
+      await expect(fund.sendFunds()).to.be.revertedWith("Not enough funds!");
+    });
+  });
+
+58. By specifying the variable "const sendValue = ethers.utils.parseEther("1");" a value of exactly 1 ETH with 18 decimals will be stored in sendValue. This line will be added to the rest of the specified variables in the test file.
+59. The next test is to find out if the value funded is equal to the mapping variable funderToMoney:
+
+it("should send 1 eth and equal funderToMoney", async () => {
+      await fund.sendFunds({ value: sendValue });
+      const response = await fund.funderToMoney(deployer);
+      assert.equal(response.toString(), sendValue.toString());
+    });
+
+60. In order to test the withdraw function, some amount of eth has to first be in the contract, therefore a beforeEach function will be added: the
+
+describe("withdrawFunds", () => {
+    beforeEach(async () => {
+      await fund.sendFunds({ value: sendValue });
+    });
+
+61. Can the manager call withdrawFund function?
+
+it("manager can call withdrawFunds function", async () => {
+      const response = await fund.withdrawFunds();
+      console.log(response.from);
+      console.log(deployer);
+      assert.equal(response.from, deployer);
+    });
+
+62. Can we withdraw with a single funder?
+
+it("can withdraw from a single funder", async () => {
+      //Arrange
+      const startingFundContractBalance = await fund.provider.getBalance(
+        fund.address
+      );
+      console.log(startingFundContractBalance.toString());
+      const startingFunderBalance = await fund.provider.getBalance(deployer);
+      console.log(startingFunderBalance.toString());
+      //Act
+      const transactionResponse = await fund.withdrawFunds();
+      const transactionReceipt = await transactionResponse.wait(1);
+      console.log(transactionReceipt);
+      const gasCost =
+        transactionReceipt.cumulativeGasUsed *
+        transactionReceipt.effectiveGasPrice;
+
+      const endingFundContractBalance = await fund.provider.getBalance(
+        fund.address
+      );
+      console.log(endingFundContractBalance.toString());
+      const endingFunderBalance = await fund.provider.getBalance(deployer);
+      console.log(endingFunderBalance.toString());
+      //Assert
+      assert.equal(endingFundContractBalance, 0);
+      assert.equal(
+        startingFunderBalance.add(startingFundContractBalance).toString(),
+        endingFunderBalance.add(gasCost).toString()
+      );
+    });
+  });
+
+#note: in order to do this, we need three stages of testing, arrange, act and assert.
+63. Can we withdraw when there are multiple funders?
+
+ it("can withdraw from a multiple funders", async () => {
+      //Arrange
+      const accounts = await ethers.getSigners();
+      for (i = 1; i < 6; i++) {
+        const fundConnectedContract = await fund.connect(accounts[i]);
+        const sentFrom = await fundConnectedContract.sendFunds({
+          value: sendValue,
+        });
+        console.log(sentFrom.from);
+      }
+      const startingFundContractBalance = await fund.provider.getBalance(
+        fund.address
+      );
+      const startingFunderBalance = await fund.provider.getBalance(deployer);
+      console.log(deployer);
+
+      //Act
+      const transactionResponse = await fund.withdrawFunds();
+      const transactionReceipt = await transactionResponse.wait(1);
+      const gasCost =
+        transactionReceipt.cumulativeGasUsed *
+        transactionReceipt.effectiveGasPrice;
+      const endingFundContractBalance = await fund.provider.getBalance(
+        fund.address
+      );
+      const endingFunderBalance = await fund.provider.getBalance(deployer);
+      //Assert
+      assert.equal(endingFundContractBalance, 0);
+      assert.equal(
+        startingFunderBalance.add(startingFundContractBalance).toString(),
+        endingFunderBalance.add(gasCost).toString()
+      );
+      await expect(fund.funders(0)).to.be.reverted;
+
+      for (i = 0; i < 6; i++) {
+        assert.equal(await fund.funderToMoney(accounts[i].address), 0);
+      }
+    });
+
+64. is only manager able to withdraw?
+
+it("only manager is able to withdraw", async () => {
+      const accounts = await ethers.getSigners();
+      const attacker = accounts[1];
+      const attackerConnectedContract = await fund.connect(attacker);
+      await expect(attackerConnectedContract.withdrawFunds()).to.be.reverted;
+    });
+
+
+
+>> Staging Test
+65. Create a js file in staging folder called "Fund.staging.js"
+66. Back in the unit test a change is made by adding these lines after imports before describe:
+
+!developmentChains.includes(network.name)
+  ? describe.skip
+  : //otherwise run the rest of the code
+
+This ensures that if the network is a fake test network the unit test runs and if it is on a real test network the test will be skipped.
+67. In order for the unit test to work developmentChains has to be imported as well:
+
+const { developmentChains } = require("../../helper-hardhat-config");
+
+68. Add the following code to the staging file:
+
+const { deployments, ethers, getNamedAccounts, network } = require("hardhat");
+const { assert, expect } = require("chai");
+const { developmentChains } = require("../../helper-hardhat-config");
+
+developmentChains.includes(network.name)
+  ? //if yes then skip
+    describe.skip
+  : //otherwise run the following
+    describe("Fund", () => {
+      let fund;
+      let deployer;
+      const sendValue = ethers.utils.parseEther("1");
+      beforeEach(async () => {
+        deployer = (await getNamedAccounts()).deployer;
+        fund = await ethers.getContract("Fund", deployer);
+      });
+    });
+
+69. an it function will be written like the following:
+
+it("allows for funding and withdrawing", async () => {
+        await fund.sendFunds({ value: sendValue });
+        await fund.withdrawFunds();
+        const endingBalance = await fund.provider.getBalance(fund.address);
+        assert.equal(endingBalance, 0);
+      });
+
+70. By running "npx hardhat test" the unit test will be run and by running "npx hardhat test --network goerli" the staging test will be run.
+
+
+
+
